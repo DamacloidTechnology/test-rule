@@ -8,7 +8,7 @@
 //!
 //! ```rust
 //! use fraud_rule_engine::{RuleEngine, Transaction, UserProfile, Value};
-//! use std::collections::HashMap;
+//! use ahash::HashMap;
 //!
 //! let dsl = r#"
 //!     rule "high_amount" {
@@ -22,11 +22,11 @@
 //!
 //! let engine = RuleEngine::from_dsl(dsl).unwrap();
 //!
-//! let mut txn_fields = HashMap::new();
+//! let mut txn_fields = HashMap::default();
 //! txn_fields.insert("amount".to_string(), Value::Float(5000.0));
 //! let transaction = Transaction { fields: txn_fields };
 //!
-//! let profile = UserProfile { fields: HashMap::new() };
+//! let profile = UserProfile { fields: HashMap::default() };
 //!
 //! let result = engine.execute(transaction, profile);
 //! assert_eq!(result.actions.len(), 2); // createCase + setFraudScore
@@ -36,6 +36,7 @@ pub mod actions;
 pub mod compiler;
 pub mod parser;
 pub mod runtime;
+
 
 use ahash::HashMap;
 use serde::{Deserialize, Serialize};
@@ -249,7 +250,7 @@ impl RuleEngine {
     ///
     /// ```rust
     /// use fraud_rule_engine::{RuleEngine, Transaction, UserProfile, Value};
-    /// use std::collections::HashMap;
+    /// use ahash::HashMap;
     ///
     /// let engine = RuleEngine::from_dsl("rule \"test\" { priority: 1, if (true) {} }").unwrap();
     /// let txn = Transaction::new();

@@ -35,17 +35,17 @@ impl Parser {
     pub fn new(input: &str) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new(input);
         let current_token = lexer.next_token()?;
-        
+
         Ok(Self {
             lexer,
             current_token,
         })
     }
-    
+
     pub fn parse(&mut self) -> Result<Program, ParseError> {
         let mut functions = Vec::new();
         let mut rules = Vec::new();
-        
+
         while self.current_token != Token::Eof {
             match &self.current_token {
                 Token::Function => {
@@ -61,22 +61,22 @@ impl Parser {
                 }
             }
         }
-        
+
         Ok(Program { functions, rules })
     }
-    
+
     fn parse_function(&mut self) -> Result<FunctionNode, ParseError> {
         self.expect(Token::Function)?;
-        
+
         let name = self.expect_identifier()?;
-        
+
         self.expect(Token::LeftParen)?;
-        
+
         let mut params = Vec::new();
         if self.current_token != Token::RightParen {
             loop {
                 params.push(self.expect_identifier()?);
-                
+
                 if self.current_token == Token::Comma {
                     self.advance()?;
                 } else {
@@ -84,33 +84,33 @@ impl Parser {
                 }
             }
         }
-        
+
         self.expect(Token::RightParen)?;
         self.expect(Token::LeftBrace)?;
-        
+
         let body = self.parse_block()?;
-        
+
         self.expect(Token::RightBrace)?;
-        
+
         Ok(FunctionNode { name, params, body })
     }
-    
+
     fn parse_rule(&mut self) -> Result<RuleNode, ParseError> {
         self.expect(Token::Rule)?;
-        
+
         let id = self.expect_string()?;
-        
+
         self.expect(Token::LeftBrace)?;
-        
+
         // Parse rule metadata
         let mut priority = 100;
         let mut enabled = true;
-        
+
         // Look for priority and enabled fields
         while matches!(self.current_token, Token::Identifier(_)) {
             let field_name = self.expect_identifier()?;
             self.expect(Token::Colon)?;
-            
+
             match field_name.as_str() {
                 "priority" => {
                     if let Token::Integer(n) = self.current_token {
@@ -145,18 +145,18 @@ impl Parser {
                     });
                 }
             }
-            
+
             // Skip optional comma
             if self.current_token == Token::Comma {
                 self.advance()?;
             }
         }
-        
+
         // Parse rule body (statements)
         let body = self.parse_block()?;
-        
+
         self.expect(Token::RightBrace)?;
-        
+
         Ok(RuleNode {
             id,
             priority,
@@ -164,17 +164,17 @@ impl Parser {
             body,
         })
     }
-    
+
     fn parse_block(&mut self) -> Result<Vec<Statement>, ParseError> {
         let mut statements = Vec::new();
-        
+
         while self.current_token != Token::RightBrace && self.current_token != Token::Eof {
             statements.push(self.parse_statement()?);
         }
-        
+
         Ok(statements)
     }
-    
+
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
         match &self.current_token {
             Token::If => self.parse_if_statement(),
@@ -188,22 +188,34 @@ impl Parser {
             Token::Identifier(name) => {
                 let name_clone = name.clone();
                 self.advance()?;
-                
+
+                // Handle variable declaration: `let <ident> = <expr>;`
+                if name_clone == "let" {
+                    // After advancing, current_token should be the variable name
+                    let var_name = self.expect_identifier()?;
+                    self.expect(Token::Assign)?;
+                    let value = self.parse_expression()?;
+                    if self.current_token == Token::Semicolon {
+                        self.advance()?;
+                    }
+                    return Ok(Statement::Assignment { target: var_name, value });
+                }
+
                 // Check if it's an assignment or function/action call
                 if self.current_token == Token::Dot {
                     // Could be profile.field = value or object.method()
                     self.advance()?;
                     let field = self.expect_identifier()?;
-                    
+
                     if self.current_token == Token::Assign {
                         // Assignment: profile.field = value
                         self.advance()?;
                         let value = self.parse_expression()?;
-                        
+
                         if self.current_token == Token::Semicolon {
                             self.advance()?;
                         }
-                        
+
                         Ok(Statement::Assignment {
                             target: format!("{}.{}", name_clone, field),
                             value,
@@ -217,28 +229,35 @@ impl Parser {
                 } else if self.current_token == Token::LeftParen {
                     // Function/action call
                     self.advance()?;
-                    
+
                     let args = self.parse_argument_list()?;
-                    
+
                     self.expect(Token::RightParen)?;
-                    
+
                     if self.current_token == Token::Semicolon {
                         self.advance()?;
                     }
-                    
-                    Ok(Statement::ActionCall {
-                        action: name_clone,
-                        args,
-                    })
+
+                    // Distinguish between built-in actions and user-defined functions.
+                    // Built-in actions: createCase, createComment, sendAuthAdvise, setFraudScore, setDecision
+                    match name_clone.as_str() {
+                        "createCase" | "createComment" | "sendAuthAdvise" | "setFraudScore" | "setDecision" => {
+                            Ok(Statement::ActionCall { action: name_clone, args })
+                        }
+                        _ => {
+                            // Treat as a function call expression (so compiler emits CallGlobal)
+                            Ok(Statement::Expression(Expression::FunctionCall { name: name_clone, args }))
+                        }
+                    }
                 } else if self.current_token == Token::Assign {
                     // Simple variable assignment
                     self.advance()?;
                     let value = self.parse_expression()?;
-                    
+
                     if self.current_token == Token::Semicolon {
                         self.advance()?;
                     }
-                    
+
                     Ok(Statement::Assignment {
                         target: name_clone,
                         value,
@@ -254,47 +273,47 @@ impl Parser {
             }),
         }
     }
-    
+
     fn parse_if_statement(&mut self) -> Result<Statement, ParseError> {
         self.expect(Token::If)?;
         self.expect(Token::LeftParen)?;
-        
+
         let condition = self.parse_expression()?;
-        
+
         self.expect(Token::RightParen)?;
         self.expect(Token::LeftBrace)?;
-        
+
         let then_block = self.parse_block()?;
-        
+
         self.expect(Token::RightBrace)?;
-        
+
         let else_block = if self.current_token == Token::Else {
             self.advance()?;
             self.expect(Token::LeftBrace)?;
-            
+
             let block = self.parse_block()?;
-            
+
             self.expect(Token::RightBrace)?;
-            
+
             Some(block)
         } else {
             None
         };
-        
+
         Ok(Statement::IfStatement {
             condition,
             then_block,
             else_block,
         })
     }
-    
+
     fn parse_expression(&mut self) -> Result<Expression, ParseError> {
         self.parse_logical_or()
     }
-    
+
     fn parse_logical_or(&mut self) -> Result<Expression, ParseError> {
         let mut left = self.parse_logical_and()?;
-        
+
         while self.current_token == Token::OrOr {
             self.advance()?;
             let right = self.parse_logical_and()?;
@@ -304,13 +323,13 @@ impl Parser {
                 right: Box::new(right),
             };
         }
-        
+
         Ok(left)
     }
-    
+
     fn parse_logical_and(&mut self) -> Result<Expression, ParseError> {
         let mut left = self.parse_equality()?;
-        
+
         while self.current_token == Token::AndAnd {
             self.advance()?;
             let right = self.parse_equality()?;
@@ -320,36 +339,36 @@ impl Parser {
                 right: Box::new(right),
             };
         }
-        
+
         Ok(left)
     }
-    
+
     fn parse_equality(&mut self) -> Result<Expression, ParseError> {
         let mut left = self.parse_comparison()?;
-        
+
         loop {
             let op = match self.current_token {
                 Token::EqEq => BinaryOp::Eq,
                 Token::NotEq => BinaryOp::Ne,
                 _ => break,
             };
-            
+
             self.advance()?;
             let right = self.parse_comparison()?;
-            
+
             left = Expression::Binary {
                 left: Box::new(left),
                 op,
                 right: Box::new(right),
             };
         }
-        
+
         Ok(left)
     }
-    
+
     fn parse_comparison(&mut self) -> Result<Expression, ParseError> {
         let mut left = self.parse_addition()?;
-        
+
         loop {
             let op = match self.current_token {
                 Token::Gt => BinaryOp::Gt,
@@ -358,46 +377,46 @@ impl Parser {
                 Token::Lte => BinaryOp::Lte,
                 _ => break,
             };
-            
+
             self.advance()?;
             let right = self.parse_addition()?;
-            
+
             left = Expression::Binary {
                 left: Box::new(left),
                 op,
                 right: Box::new(right),
             };
         }
-        
+
         Ok(left)
     }
-    
+
     fn parse_addition(&mut self) -> Result<Expression, ParseError> {
         let mut left = self.parse_multiplication()?;
-        
+
         loop {
             let op = match self.current_token {
                 Token::Plus => BinaryOp::Add,
                 Token::Minus => BinaryOp::Sub,
                 _ => break,
             };
-            
+
             self.advance()?;
             let right = self.parse_multiplication()?;
-            
+
             left = Expression::Binary {
                 left: Box::new(left),
                 op,
                 right: Box::new(right),
             };
         }
-        
+
         Ok(left)
     }
-    
+
     fn parse_multiplication(&mut self) -> Result<Expression, ParseError> {
         let mut left = self.parse_unary()?;
-        
+
         loop {
             let op = match self.current_token {
                 Token::Star => BinaryOp::Mul,
@@ -405,20 +424,20 @@ impl Parser {
                 Token::Percent => BinaryOp::Mod,
                 _ => break,
             };
-            
+
             self.advance()?;
             let right = self.parse_unary()?;
-            
+
             left = Expression::Binary {
                 left: Box::new(left),
                 op,
                 right: Box::new(right),
             };
         }
-        
+
         Ok(left)
     }
-    
+
     fn parse_unary(&mut self) -> Result<Expression, ParseError> {
         match self.current_token {
             Token::Not => {
@@ -440,22 +459,22 @@ impl Parser {
             _ => self.parse_postfix(),
         }
     }
-    
+
     fn parse_postfix(&mut self) -> Result<Expression, ParseError> {
         let mut expr = self.parse_primary()?;
-        
+
         loop {
             match self.current_token {
                 Token::Dot => {
                     self.advance()?;
                     let field = self.expect_identifier()?;
-                    
+
                     // Check if it's a method call
                     if self.current_token == Token::LeftParen {
                         self.advance()?;
                         let args = self.parse_argument_list()?;
                         self.expect(Token::RightParen)?;
-                        
+
                         expr = Expression::MethodCall {
                             object: Box::new(expr),
                             method: field,
@@ -479,7 +498,7 @@ impl Parser {
                     self.advance()?;
                     let index = self.parse_expression()?;
                     self.expect(Token::RightBracket)?;
-                    
+
                     expr = Expression::ArrayAccess {
                         array: Box::new(expr),
                         index: Box::new(index),
@@ -488,10 +507,10 @@ impl Parser {
                 _ => break,
             }
         }
-        
+
         Ok(expr)
     }
-    
+
     fn parse_primary(&mut self) -> Result<Expression, ParseError> {
         match &self.current_token {
             Token::True => {
@@ -524,13 +543,13 @@ impl Parser {
             Token::Identifier(name) => {
                 let name_clone = name.clone();
                 self.advance()?;
-                
+
                 // Check if it's a function call
                 if self.current_token == Token::LeftParen {
                     self.advance()?;
                     let args = self.parse_argument_list()?;
                     self.expect(Token::RightParen)?;
-                    
+
                     Ok(Expression::FunctionCall {
                         name: name_clone,
                         args,
@@ -550,14 +569,14 @@ impl Parser {
             }),
         }
     }
-    
+
     fn parse_argument_list(&mut self) -> Result<Vec<Expression>, ParseError> {
         let mut args = Vec::new();
-        
+
         if self.current_token != Token::RightParen {
             loop {
                 args.push(self.parse_expression()?);
-                
+
                 if self.current_token == Token::Comma {
                     self.advance()?;
                 } else {
@@ -565,10 +584,10 @@ impl Parser {
                 }
             }
         }
-        
+
         Ok(args)
     }
-    
+
     fn expect(&mut self, expected: Token) -> Result<(), ParseError> {
         if std::mem::discriminant(&self.current_token) == std::mem::discriminant(&expected) {
             self.advance()?;
@@ -579,7 +598,7 @@ impl Parser {
             })
         }
     }
-    
+
     fn expect_identifier(&mut self) -> Result<String, ParseError> {
         match &self.current_token {
             Token::Identifier(name) => {
@@ -592,7 +611,7 @@ impl Parser {
             }),
         }
     }
-    
+
     fn expect_string(&mut self) -> Result<String, ParseError> {
         match &self.current_token {
             Token::String(s) => {
@@ -605,7 +624,7 @@ impl Parser {
             }),
         }
     }
-    
+
     fn advance(&mut self) -> Result<(), ParseError> {
         self.current_token = self.lexer.next_token()?;
         Ok(())
@@ -626,10 +645,10 @@ mod tests {
                 }
             }
         "#;
-        
+
         let mut parser = Parser::new(input).unwrap();
         let program = parser.parse().unwrap();
-        
+
         assert_eq!(program.rules.len(), 1);
         assert_eq!(program.rules[0].id, "test");
         assert_eq!(program.rules[0].priority, 100);
@@ -647,12 +666,12 @@ mod tests {
                 }
             }
         "#;
-        
+
         let mut parser = Parser::new(input).unwrap();
         let program = parser.parse().unwrap();
-        
+
         assert_eq!(program.rules.len(), 1);
-        
+
         let stmt = &program.rules[0].body[0];
         if let Statement::IfStatement { else_block, .. } = stmt {
             assert!(else_block.is_some());
@@ -668,10 +687,10 @@ mod tests {
                 profile.count = profile.count + 1;
             }
         "#;
-        
+
         let mut parser = Parser::new(input).unwrap();
         let program = parser.parse().unwrap();
-        
+
         assert_eq!(program.functions.len(), 1);
         assert_eq!(program.functions[0].name, "updateCounter");
         assert_eq!(program.functions[0].params.len(), 1);
